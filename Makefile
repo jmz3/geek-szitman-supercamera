@@ -1,15 +1,28 @@
 MAKEFLAGS += --no-builtin-rules --no-builtin-variables
 .SUFFIXES:
 
-BIN:=out
-OPENCVFLAGS:=`pkg-config --cflags --libs opencv4`
+CXX := g++
+CXXFLAGS := -std=c++23 -Wall -Wextra -O2 -MMD -g -Iinclude -pthread
+OPENCVFLAGS := `pkg-config --cflags --libs opencv4`
+LIBUSB_CFLAGS := $(shell pkg-config --cflags libusb-1.0 2>/dev/null || pkg-config --cflags libusb 2>/dev/null)
+LIBUSB_LIBS := $(shell pkg-config --libs libusb-1.0 2>/dev/null || pkg-config --libs libusb 2>/dev/null || echo -lusb-1.0)
 
-all: $(BIN)
+VIEWER_BIN := out
+SENDER_BIN := out_stream_sender
+CORE_OBJ := src/supercamera_core.o
 
--include $(BIN).d
+all: $(VIEWER_BIN) $(SENDER_BIN)
 
-$(BIN): supercamera_poc.cpp Makefile
-	g++ -std=c++23 "$<" -Wall -Wextra -O2 -MMD -g $(OPENCVFLAGS) -lusb-1.0 -o "$@"
+-include $(VIEWER_BIN).d $(SENDER_BIN).d src/supercamera_core.d
+
+$(CORE_OBJ): src/supercamera_core.cpp include/supercamera_core.hpp Makefile
+	$(CXX) $(CXXFLAGS) $(LIBUSB_CFLAGS) -c "$<" -o "$@"
+
+$(VIEWER_BIN): src/supercamera_poc.cpp $(CORE_OBJ) include/supercamera_core.hpp Makefile
+	$(CXX) $(CXXFLAGS) $(LIBUSB_CFLAGS) "$<" $(CORE_OBJ) $(OPENCVFLAGS) $(LIBUSB_LIBS) -o "$@"
+
+$(SENDER_BIN): src/supercamera_stream_sender.cpp $(CORE_OBJ) include/supercamera_core.hpp Makefile
+	$(CXX) $(CXXFLAGS) $(LIBUSB_CFLAGS) "$<" $(CORE_OBJ) $(LIBUSB_LIBS) -o "$@"
 
 clean:
-	rm -rf $(BIN) $(BIN).d
+	rm -rf $(VIEWER_BIN) $(SENDER_BIN) $(VIEWER_BIN).d $(SENDER_BIN).d $(CORE_OBJ) src/supercamera_core.d

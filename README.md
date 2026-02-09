@@ -1,9 +1,20 @@
 # ‘Geek szitman supercamera’ viewer
 
-### Description
-
 This repository is a proof-of-concept to use the ‘Geek szitman supercamera’ camera-based products.
-It features a small viewer app.
+
+<div align="center">
+
+<h2>External View</h2>
+
+![Demo Shot on iPhone](./assets/demo-phone.gif)
+
+<h2>Endoscope View (Two Cam) </h2>
+
+![Demo Shot on Camera](./assets/demo-cam.gif)
+
+</div>
+
+
 
 ### Technical information
 
@@ -13,32 +24,79 @@ Only firmware version 1.00 has been tested. USB descriptors can be found in file
 
 **Contrary to the advertised specification**, the camera resolution is 640×480.
 
-License is CC0: integrate this code as you like in other camera viewer software / apps.
 
-If you have another hardware also using the ‘com.useeplus.protocol’ protocol, it may or may not work.
-If it does, please open an issue so it can be added to the list of working devices.
-If it does not work, please open an issue (see [Troubleshooting](#troubleshooting)).
+## Prerequisite (simple Ubuntu setup)
 
-### Build
+First install the required packages:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+    libusb-1.0-0-dev \
+    pkg-config \
+    ros-noetic-compressed-image-transport
+```
+
+If you are building this repo directly on the same machine, also install:
+
+```bash
+sudo apt-get install -y build-essential cmake libopencv-dev python3-pip
+```
+
+Create the USB rule file so the USB device can be accessed by non-root users:
+
+```bash
+echo 'SUBSYSTEMS=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="2ce3", ATTRS{idProduct}=="3828", MODE="0666"' | sudo tee /etc/udev/rules.d/99-supercamera.rules
+```
+
+Then reload and trigger the rules:
+
+```bash
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+Important: disconnect and reconnect the USB cable so udev applies new permissions.
+
+Verify permissions:
+
+```bash
+lsusb | grep 2ce3:3828
+# Expected: Bus 001 Device 009: ID 2ce3:3828
+
+ls -l /dev/bus/usb/001/009
+# Expected: crw-rw-rw- ... /dev/bus/usb/001/009
+```
+
+The bus/device numbers (`001/009` above) must match your actual `lsusb` output.
+
+## Build
 
 Install dependencies (packages given assume a Debian-based system):
 
 ```bash
-apt install build-essential libusb-1.0-0-dev libopencv-dev
+apt install build-essential cmake pkg-config libusb-1.0-0-dev libopencv-dev
 ```
 
-Build the tool:
+Build with CMake:
+
+```bash
+cmake -S . -B build
+cmake --build build -j
+```
+
+Legacy Makefile build is still available:
 
 ```bash
 make
 ```
 
-### Usage
+## Usage
 
 Run the tool:
 
 ```bash
-./out
+./build/out
 ```
 
 It will display the camera feed in a GUI window.
@@ -47,14 +105,77 @@ It will display the camera feed in a GUI window.
 - long press on the endoscope button will switch between the two cameras
 - press <kbd>q</kbd> or <kbd>Esc</kbd> in the GUI window to quit
 
-### udev rules
+### Real-time TCP streaming 
 
-To allow running the tool without superuser privileges, add a udev rule:
+Run the sender:
 
 ```bash
-echo 'SUBSYSTEMS=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="2ce3", ATTRS{idProduct}=="3828", MODE="0666"' | sudo tee /etc/udev/rules.d/99-supercamera.rules
-echo 'SUBSYSTEMS=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="0329", ATTRS{idProduct}=="2022", MODE="0666"' | sudo tee -a /etc/udev/rules.d/99-supercamera.rules
+./build/out_stream_sender --transport tcp --bind 0.0.0.0 --port 9000 --camera-count 2
 ```
+
+Options:
+
+- `--transport <tcp|udp>` (`udp` currently returns a not-implemented error)
+- `--bind <ip>` (default: `0.0.0.0`)
+- `--port <n>` (default: `9000`)
+- `--camera-count <n>` (default: `1`, use `2` for two USB cameras)
+- `--max-fps <n>` (default: `0`, meaning unlimited)
+- `--log-every <n>` (default: `120`)
+
+Protocol details are documented in `STREAM_PROTOCOL.md`.
+
+
+
+
+### Python receiver (OpenCV)
+
+You can receive and display the TCP stream with:
+
+```bash
+python3 scripts/stream_receiver.py --host 127.0.0.1 --port 9000
+```
+
+Receiver dependencies:
+
+```bash
+pip install opencv-python numpy
+```
+
+The receiver opens one OpenCV window per source (`source 0`, `source 1`). When multiple cameras are streamed, the receiver opens one OpenCV window per source.
+Press <kbd>q</kbd> or <kbd>Esc</kbd> in the receiver window to quit.
+
+### Stream over Wi-Fi (two PCs on same network)
+
+Use this when camera/sender and receiver are on different PCs connected to the same Wi-Fi.
+
+1. On PC A (camera + sender), start sender on all interfaces:
+
+```bash
+./build/out_stream_sender --transport tcp --bind 0.0.0.0 --port 9000 --camera-count 2
+```
+
+2. On PC A, get its LAN IP address (example commands):
+
+```bash
+hostname -I        # Linux
+ipconfig getifaddr en0  # macOS (Wi-Fi interface)
+```
+
+Assume the IP is `192.168.1.50`.
+
+3. On PC B (receiver), run:
+
+```bash
+python3 scripts/stream_receiver.py --host 192.168.1.50 --port 9000
+```
+
+4. If connection fails, check:
+
+- both PCs are on the same subnet (for example `192.168.1.x`)
+- PC A firewall allows inbound TCP port `9000`
+- Wi-Fi/router guest isolation is disabled
+
+
 
 ### Troubleshooting
 
@@ -67,10 +188,15 @@ If your hardware is different, do include its USB descriptors:
 lsusb -vd $(lsusb | grep Geek | awk '{print $6}')
 ```
 
+**Additional udev rule for alternate VID/PID**
+
+Some devices enumerate as `0329:2022`. Add this rule if needed:
+
+```bash
+echo 'SUBSYSTEMS=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="0329", ATTRS{idProduct}=="2022", MODE="0666"' | sudo tee -a /etc/udev/rules.d/99-supercamera.rules
+```
+
 **Known issues:**
 
 - `fatal: usb device not found`: check your device is properly plugged in. Check you have added udev rules properly. Try to run the program with root privileges: `sudo ./out`.
 
-### License
-
-This project is distributed under Creative Commons Zero v1.0 Universal (CC0-1.0).
